@@ -88,24 +88,77 @@ Ubuntu 18.04 LTS x64와 Firefox 67.0.2를 같은 VM에 배치하는 것은 연�
 
 통합 시연 트랙의 SYSTEM 세션은 브로커를 의도적으로 LocalSystem 서비스로 구성했기 때문에 나타난다. 이는 실제 대화형 리버스 셸이지만 CVE를 통한 권한 상승 증거는 아니다. 실제 CVE 종단 간 성공은 일반 사용자 브라우저 프로세스에서 시작해 SYSTEM으로 전환되는 시점이 별도로 관찰됐을 때만 주장한다.
 
-### 권장 GNS3 토폴로지
+### 확정 피해 환경
+
+| 항목 | 확정 사양 | 선정 근거 |
+| --- | --- | --- |
+| OS | Windows 7 SP1 32-bit, NT 6.1 build 7601 | CVE-2019-0808 공식 영향 대상이며 Google이 실제 체인에서 관찰한 환경이 Windows 7 32-bit임 |
+| 취약 브라우저 | Chrome 72.0.3626.119 32-bit | CVE-2019-5786 수정판보다 이전인 마지막 실습 후보 |
+| 브라우저 수정 대조군 | Chrome 72.0.3626.121 32-bit | CVE-2019-5786 공식 수정 버전 |
+| 취약 OS 패치 기준 | 2019-03 월간 롤업 KB4489878까지 적용 | 실제 공격 시기와 가까운 기준선을 만들고 불필요하게 오래된 취약점을 줄임 |
+| OS 수정 대조군 | KB4493472 월간 롤업 또는 KB4493448 보안 전용 업데이트 중 기존 업데이트 방식에 맞는 하나 | 2019-04 CVE-2019-0808 수정 기준. 이미지 구축 시 MSRC 제품별 표에서 포함 여부를 다시 확인함 |
+| 실습 도메인 | 실행마다 고유한 `*.portal.lab.test` | 실존 도메인을 사용하지 않고 DNS 캐시 충돌을 줄임 |
+| 웹 전송 | HTTP | HTTPS 인증서와 HSTS가 DNS 변조 관찰을 방해하지 않게 함 |
+
+`winver`의 build 7601만으로는 패치 상태를 구분할 수 없다. 각 스냅샷에 설치된 KB 목록, Chrome 전체 버전과 x86 아키텍처, OS·브라우저 설치 파일의 공급자 서명과 해시를 함께 기록한다.
+
+### 확정 스냅샷
+
+| 이름 | Windows 상태 | Chrome 상태 | 확인할 경계 |
+| --- | --- | --- | --- |
+| `VULN-BOTH` | KB4489878까지, 2019-04 수정 미적용 | 72.0.3626.119 x86 | 전체 취약 기준선 |
+| `PATCH-BROWSER` | `VULN-BOTH`와 동일 | 72.0.3626.121 x86 | 브라우저 RCE 단계 차단 |
+| `PATCH-OS` | 2019-04 CVE 수정 적용 | 72.0.3626.119 x86 | Win32k 권한 상승 단계 차단 |
+
+필요하면 두 수정 사항을 모두 적용한 `PATCH-ALL`을 추가한다. 각 스냅샷은 같은 원본 VM을 복제해 CPU, RAM, NIC와 나머지 설정을 동일하게 유지한다.
+
+### 지원 VM과 자원
+
+| 노드 | OS | vCPU | RAM | 디스크 | NIC |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 피해자 | Windows 7 SP1 x86 | 2 | 2 GB | 30 GB | 1 |
+| 인라인 MITM/라우터 | Debian 12 Bookworm x64 최소 설치 | 2 | 2 GB | 12 GB | 2 |
+| 정상 DNS/Web | Ubuntu Server 22.04.5 LTS x64 | 1 | 1 GB | 10 GB | 1 |
+| 공격 Web/세션 수신 | Kali Linux 2024.4 x64 | 2 | 2 GB | 16 GB | 1 |
+
+GNS3 호스트는 RAM 16 GB 이상과 VT-x/AMD-V를 권장한다. 별도 관찰 VM 대신 GNS3 링크 캡처를 사용해 자원을 줄인다.
+
+### 확정 GNS3 토폴로지
 
 ```text
-[정상 DNS/Web VM] 10.10.10.10
+[피해자 Windows 7] 10.10.10.30
           |
-[공격자 제어 VM] 10.10.10.20 ---- [GNS3 L2 switch] ---- [피해자 Windows VM] 10.10.10.30
-          |                                  |
-[PCAP/관찰 VM] 10.10.10.40                   +-- 내부망 NIC만 사용
+     [SW-VICTIM]
+          |
+[인라인 MITM/라우터]
+  10.10.10.1 / 10.10.20.1
+          |
+     [SW-SERVER]
+          |------------------------------|
+[정상 DNS/Web]                      [공격 Web/세션 수신]
+  10.10.20.10                          10.10.20.20
 ```
 
-- GNS3의 내부 스위치만 사용하고 Cloud/NAT 노드는 연결하지 않는다.
-- `portal.lab.test` 같은 실습 전용 도메인을 사용하고 실존 서비스 도메인은 사용하지 않는다.
-- 공격자 VM은 DNS 응답, 공격 페이지, 셸 수신 콘솔을 담당한다.
-- 피해 VM에는 폐쇄망 전용 실습 브로커를 미리 설치한다. 정해진 실습 도메인, 공격자 IP, 일회용 실행 ID가 모두 일치할 때만 역방향 세션을 시작하게 제한한다.
+| 노드 | 인터페이스/IP | 게이트웨이 | DNS | 역할 |
+| --- | --- | --- | --- | --- |
+| 피해자 | `10.10.10.30/24` | `10.10.10.1` | `10.10.20.10` | 취약 브라우저와 실습 브로커 |
+| MITM/라우터 | `10.10.10.1/24`, `10.10.20.1/24` | 없음 | 불필요 | 내부 포워딩과 DNS 응답 변조 |
+| 정상 DNS/Web | `10.10.20.10/24` | `10.10.20.1` | 자체 | 정상 DNS 응답과 기준 페이지 |
+| 공격 Web/수신 | `10.10.20.20/24` | `10.10.20.1` | 불필요 | 변조 후 페이지와 역방향 세션 수신 |
+
+- GNS3의 내부 스위치 두 개만 사용하고 Cloud/NAT 노드는 연결하지 않는다.
+- MITM VM에는 세 번째 NIC, 외부 기본 경로 또는 호스트 브리지를 추가하지 않는다.
+- 피해자는 계속 정상 DNS `10.10.20.10`에 질의한다. 정상 상태에서는 실습 도메인이 `10.10.20.10`을 가리키고, 변조 상태에서는 MITM을 통과한 응답만 `10.10.20.20`으로 바뀐다.
+- 피해자의 DNS 설정을 바꾸지 않으므로 단순한 DNS 서버 재설정과 인라인 DNS 응답 스푸핑을 구분할 수 있다.
+- 역방향 세션은 피해자 `10.10.10.30`에서 공격 수신 서버 `10.10.20.20`으로 시작하며 MITM을 통과한다.
+- 피해 VM의 실습 브로커는 정해진 도메인, 공격자 IP, 일회용 실행 ID가 모두 일치할 때만 세션을 시작한다.
 - 브로커는 공격자 IP 고정, 단일 세션, 짧은 자동 종료, 실습 서브넷 외 통신 차단 조건을 적용한다.
-- 공격자, 피해자, 관찰 VM은 모두 스냅샷을 만들고 공유 폴더와 공유 클립보드를 비활성화한다.
+- 피해자 측과 서버 측 MITM 링크를 동시에 캡처한다. 서버 측 원본 DNS 응답과 피해자 측 변조 응답을 같은 질의와 시각으로 비교한다.
+- 네 VM 모두 스냅샷을 만들고 공유 폴더와 공유 클립보드를 비활성화한다.
 - 피해 VM의 시간 동기화와 자동 업데이트는 격리 상태에서 통제한다.
 - 오래된 OS와 브라우저 설치 파일은 공급자 서명과 해시를 기록하고, 검증되지 않은 제3자 바이너리는 사용하지 않는다.
+
+이 토폴로지는 공격자가 이미 라우팅 경로를 장악한 **인라인 게이트웨이형 DNS 스푸핑**이다. 같은 L2 네트워크에 들어온 공격자가 ARP 포이즈닝으로 경로를 새로 탈취하는 시나리오와는 구분해 보고한다.
 
 ### 단계별 시연
 
@@ -167,6 +220,9 @@ Ubuntu 18.04 LTS x64와 Firefox 67.0.2를 같은 VM에 배치하는 것은 연�
 - Chrome Stable Channel Update (2019-03): <https://chromereleases.googleblog.com/2019/03/stable-channel-update-for-desktop.html>
 - Google Security Blog, Windows 7 exploit chain 공개: <https://security.googleblog.com/2019/03/disclosing-vulnerabilities-to-protect.html>
 - Microsoft MSRC CVE-2019-0808: <https://msrc.microsoft.com/update-guide/vulnerability/CVE-2019-0808>
+- Microsoft Update Catalog KB4489878: <https://www.catalog.update.microsoft.com/Search.aspx?q=KB4489878>
+- Microsoft Update Catalog KB4493472: <https://www.catalog.update.microsoft.com/Search.aspx?q=KB4493472>
+- Microsoft Update Catalog KB4493448: <https://www.catalog.update.microsoft.com/Search.aspx?q=KB4493448>
 - Microsoft MSRC CVE-2020-0674: <https://msrc.microsoft.com/update-guide/vulnerability/CVE-2020-0674>
 - Chrome Stable Channel Update (2021-04): <https://chromereleases.googleblog.com/2021/04/stable-channel-update-for-desktop_20.html>
 - Microsoft MSRC CVE-2021-31955: <https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-31955>
