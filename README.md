@@ -159,3 +159,154 @@ DNS 스푸핑은 공격 페이지로 유도하는 전달 단계다. 브라우저
 - Microsoft Update Catalog KB4489878: <https://www.catalog.update.microsoft.com/Search.aspx?q=KB4489878>
 - Microsoft Update Catalog KB4493472: <https://www.catalog.update.microsoft.com/Search.aspx?q=KB4493472>
 - Microsoft Update Catalog KB4493448: <https://www.catalog.update.microsoft.com/Search.aspx?q=KB4493448>
+
+## GNS3 네트워크 설정
+
+### 토폴로지와 주소 계획
+
+실습 네트워크는 GNS3 Ethernet switch 하나로 구성하며, 각 VM의 NIC 하나만 스위치에 연결한다. 이 내부망에는 라우터, NAT, Cloud, 외부 기본 게이트웨이를 연결하지 않는다.
+
+| VM | 주소 | 게이트웨이 | DNS |
+| --- | --- | --- | --- |
+| 피해자 Windows 7 | `10.10.10.30/24` | 없음 | `10.10.10.53` |
+| 공격자 Kali Linux | `10.10.10.20/24` | 없음 | `10.10.10.53` |
+| DNS Ubuntu Server | `10.10.10.53/24` | 없음 | `127.0.0.1` |
+| 웹 Ubuntu Server | `10.10.10.80/24` | 없음 | `10.10.10.53` |
+
+게이트웨이가 없으므로 이 실습망의 VM은 외부 인터넷에 접근하지 못한다. OS 업데이트와 패키지 설치는 격리망에 연결하기 전에 완료하고, 설치 후에는 NAT/Cloud 연결을 제거한다.
+
+### 인터페이스 이름 확인
+
+설정 전에 각 Linux VM에서 실제 NIC 이름을 확인한다. 아래 예시의 `ens3` 또는 `eth0`를 그대로 가정하지 말고, 출력된 인터페이스 이름을 설정에 사용한다.
+
+```bash
+ip -br link
+ip -br address
+```
+
+Ubuntu Server의 네트워크는 Netplan으로 설정한다. 먼저 기존 파일과 설정을 확인한다.
+
+```bash
+ls /etc/netplan/
+sudo netplan get
+```
+
+### DNS 서버 Ubuntu 설정
+
+기존 Netplan 파일을 편집하고 `<인터페이스명>`을 앞에서 확인한 NIC 이름으로 바꾼다. 기존 파일의 다른 설정이 필요하다면 보존한다.
+
+```bash
+sudo nano /etc/netplan/00-installer-config.yaml
+```
+
+예시:
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    <인터페이스명>:
+      dhcp4: false
+      addresses:
+        - 10.10.10.53/24
+      nameservers:
+        addresses:
+          - 127.0.0.1
+```
+
+실제 파일명이 다르면 존재하는 파일을 수정한다. YAML 들여쓰기를 유지하고 적용한다.
+
+```bash
+sudo netplan generate
+sudo netplan try
+```
+
+설정이 맞으면 확인 프롬프트에서 승인한다. DNS 서비스가 로컬 주소에서 질의를 받도록 설정되어 있어야 `127.0.0.1`을 DNS 서버 자신을 가리키는 주소로 사용할 수 있다.
+
+### 웹 서버 Ubuntu 설정
+
+기존 Netplan 파일에서 `<인터페이스명>`을 실제 NIC 이름으로 바꾸고 주소를 설정한다.
+
+```bash
+sudo nano /etc/netplan/00-installer-config.yaml
+```
+
+예시:
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    <인터페이스명>:
+      dhcp4: false
+      addresses:
+        - 10.10.10.80/24
+      nameservers:
+        addresses:
+          - 10.10.10.53
+```
+
+```bash
+sudo netplan generate
+sudo netplan try
+```
+
+설정이 맞으면 확인 프롬프트에서 승인한다.
+
+### Kali Linux 설정
+
+Kali에서 먼저 인터페이스와 NetworkManager 연결 이름을 확인한다.
+
+```bash
+ip -br link
+nmcli connection show
+```
+
+Kali의 데스크톱 환경에서는 네트워크 연결 편집기에서 IPv4 Method를 `Manual`로 설정하고 주소 `10.10.10.20`, 넷마스크 `255.255.255.0`, 게이트웨이는 비움, DNS `10.10.10.53`을 입력한다. 연결 이름과 NIC 이름은 설치 환경에 따라 다를 수 있으므로 확인 후 선택한다. `/etc/resolv.conf`를 직접 편집하거나 IP forwarding을 켤 필요는 없다.
+
+### 피해자 Windows 7 설정
+
+관리자 권한 CMD에서 먼저 네트워크 인터페이스의 실제 이름을 확인한다.
+
+```cmd
+netsh interface show interface
+```
+
+출력된 인터페이스 이름을 아래 `<인터페이스명>`에 넣는다. 이름에 공백이 있으면 따옴표를 유지한다.
+
+```cmd
+netsh interface ipv4 set address name="<인터페이스명>" source=static address=10.10.10.30 mask=255.255.255.0 gateway=none
+netsh interface ipv4 set dnsservers name="<인터페이스명>" source=static address=10.10.10.53 validate=no
+```
+
+또는 네트워크 어댑터의 IPv4 속성에서 위 주소와 서브넷 마스크를 지정하고, 기본 게이트웨이는 비워 둔다.
+
+### 연결 및 DNS 확인
+
+각 Linux VM에서 주소와 경로를 확인한다.
+
+```bash
+ip -br address
+ip route
+```
+
+Windows에서는 다음 명령을 사용한다.
+
+```cmd
+ipconfig /all
+```
+
+내부 통신을 확인한다. 대상 OS의 방화벽이 ICMP를 차단할 수 있으므로 ping 실패만으로 연결 불량을 단정하지 말고, 링크 상태와 서비스 연결도 함께 확인한다.
+
+```bash
+ping -c 3 10.10.10.80
+ping -c 3 10.10.10.53
+```
+
+DNS 서버에는 README에서 정한 실습 이름 `portal.lab.test`의 정상 레코드가 `10.10.10.80`으로 설정되어 있어야 한다. Kali 또는 DNS 서버에서 확인한다.
+
+```bash
+dig @10.10.10.53 portal.lab.test
+```
+
+정상 응답의 A 레코드가 `10.10.10.80`인지 확인한다. `webpage.com` 같은 외부 도메인은 이 격리된 실습 DNS 영역에 설정하지 않았다면 이 테스트에 사용할 수 없다.
