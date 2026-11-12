@@ -6,17 +6,19 @@ from __future__ import annotations
 import argparse
 import logging
 import mimetypes
-import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
 
-HOST_RE = re.compile(
-    r"^(?P<role>wrap|exp)-(?P<run>[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?)"
-    r"\.portal\.lab\.test$",
-    re.IGNORECASE,
-)
+HOST_ROLES = {
+    "portal.lab.test": "wrap",
+    "exp.portal.lab.test": "exp",
+}
+
+
+def role_for_host(host: str) -> str | None:
+    return HOST_ROLES.get(host.lower())
 
 
 class LabHandler(BaseHTTPRequestHandler):
@@ -24,12 +26,11 @@ class LabHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         host = self.headers.get("Host", "").split(":", 1)[0]
-        match = HOST_RE.fullmatch(host)
-        if match is None:
+        role = role_for_host(host)
+        if role is None:
             self.send_error(400, "unexpected lab host name")
             return
 
-        role = match.group("role").lower()
         root = self.server.wrapper_root if role == "wrap" else self.server.exploit_root
         request_path = PurePosixPath(unquote(urlsplit(self.path).path))
         if ".." in request_path.parts:
@@ -84,7 +85,7 @@ def main() -> int:
         format="%(asctime)s %(message)s",
         handlers=[logging.FileHandler(args.log, encoding="utf-8"), logging.StreamHandler()],
     )
-    logging.info("serving wrap/exp lab origins on http://%s:%d", args.bind, args.port)
+    logging.info("serving portal/exp lab origins on http://%s:%d", args.bind, args.port)
     server.serve_forever()
     return 0
 

@@ -53,15 +53,28 @@ class EmbeddedBuildTests(unittest.TestCase):
 
 
 class HttpOriginTests(unittest.TestCase):
-    def test_accepts_paired_lab_hostnames(self) -> None:
-        wrap = lab_http_server.HOST_RE.fullmatch("wrap-run01.portal.lab.test")
-        exploit = lab_http_server.HOST_RE.fullmatch("exp-run01.portal.lab.test")
-        self.assertIsNotNone(wrap)
-        self.assertIsNotNone(exploit)
-        self.assertEqual(wrap.group("run"), exploit.group("run"))
+    def test_accepts_fixed_lab_hostnames(self) -> None:
+        self.assertEqual(lab_http_server.role_for_host("portal.lab.test"), "wrap")
+        self.assertEqual(lab_http_server.role_for_host("exp.portal.lab.test"), "exp")
 
     def test_rejects_unscoped_hostname(self) -> None:
-        self.assertIsNone(lab_http_server.HOST_RE.fullmatch("example.com"))
+        for host in (
+            "example.com",
+            "portal.lab.test.evil",
+            "wrap-run01.portal.lab.test",
+            "exp-run01.portal.lab.test",
+        ):
+            with self.subTest(host=host):
+                self.assertIsNone(lab_http_server.role_for_host(host))
+
+    def test_wrapper_is_transparent_and_uses_fixed_destinations(self) -> None:
+        wrapper = (
+            Path(__file__).resolve().parents[1] / "host1_wrapper" / "iframe.html"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Authorized security lab simulation", wrapper)
+        self.assertIn("exp.portal.lab.test", wrapper)
+        self.assertIn("http://10.10.10.80/", wrapper)
+        self.assertIn("e.origin !== expectedOrigin", wrapper)
 
 
 if __name__ == "__main__":

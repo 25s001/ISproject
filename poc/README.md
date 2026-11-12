@@ -141,24 +141,36 @@ The expected final Kali route is only the isolated subnet:
 Do not connect the Windows victim to NAT. The final topology contains only the
 single GNS3 switch and one lab NIC per VM.
 
-## Serve the paired origins
+## Serve the transparent portal flow
 
-Choose a short run ID, such as `run01`. Configure the lab DNS spoof so both
-names resolve to Kali `10.10.10.20` for the victim:
+Only during the authorized, isolated exercise, configure the victim's spoofed
+DNS answers so both names resolve to Kali `10.10.10.20`:
 
 ```text
-wrap-run01.portal.lab.test
-exp-run01.portal.lab.test
+portal.lab.test      -> 10.10.10.20
+exp.portal.lab.test  -> 10.10.10.20
 ```
 
-Start the HTTP server and bounded verifier on Kali:
+The authoritative DNS configuration remains `portal.lab.test -> 10.10.10.80`.
+The direct IP is used for the final redirect so the temporary spoof cannot
+create a loop.
+
+Start the unprivileged HTTP server on Kali:
 
 ```bash
 cd ~/isproject-poc-embedded
 python3 scripts/lab_http_server.py
 ```
 
-In a second Kali terminal:
+To let the victim omit `:8000`, add this narrowly scoped temporary port rule on
+the Kali GNS3 interface:
+
+```bash
+sudo iptables -t nat -A PREROUTING -i eth0 -p tcp \
+  -d 10.10.10.20 --dport 80 -j REDIRECT --to-ports 8000
+```
+
+Then start the bounded verifier in a second Kali terminal:
 
 ```bash
 cd ~/isproject-poc-embedded
@@ -166,19 +178,24 @@ python3 scripts/verify_callback.py
 ```
 
 The HTTP server listens on `10.10.10.20:8000` and writes `http-access.log`.
-Different wrapper and exploit host names are required for the upstream Site
-Isolation retry technique.
+The temporary port rule exposes it as port 80 to the victim. Different wrapper
+and exploit host names are still required for the upstream Site Isolation retry
+technique.
 
 ## Trigger from Windows
 
 In the vulnerable victim Chrome browser, open only:
 
 ```text
-http://wrap-run01.portal.lab.test:8000/
+http://portal.lab.test/
 ```
 
 `exploit.html` already calls `exploit()` automatically on page load. No payload
-download or manual executable launch is required.
+download or manual executable launch is required. The wrapper visibly labels
+the page as an authorized security lab. After a browser-level `SUCCESS` message,
+it waits 10 seconds and redirects to the normal portal at
+`http://10.10.10.80/`. That browser message is not proof of a SYSTEM callback;
+use the verifier output below as the final evidence.
 
 Success requires all of the following:
 
@@ -190,6 +207,14 @@ Success requires all of the following:
 The exploit is probabilistic and can crash the renderer or VM. Stop after one
 verified success, record hashes and timestamps, and restore the intended
 VirtualBox snapshot.
+
+Remove the temporary port rule after the exercise, then restore the normal DNS
+and ARP state:
+
+```bash
+sudo iptables -t nat -D PREROUTING -i eth0 -p tcp \
+  -d 10.10.10.20 --dport 80 -j REDIRECT --to-ports 8000
+```
 
 ## Victim baseline already observed
 
